@@ -10,65 +10,58 @@ import (
 	"github.com/gorilla/mux"
 )
 
+//Above is provided the main components strucutres 
+
+//Customer Model
 type Customer struct{
 	ID 		 int    `json:"id"`
 	Username string `json:"user_name"`
 	Basket   		[]Order		   
 }
-
-var customers []Customer
+var customers []Customer			//Customers list 
  	
-
 // Product Model
 type Product struct {
 	ID 	  int 	  `json:"id"`
 	Name  string  `json:"name"`
-	Price int `json:"price"`
+	Price int 	  `json:"price"`
 }
-
-var products []Product
-
+var products []Product			  //Products list
 
 // Category Model
 type Category struct {
 	ID 	 int 	`json:"id"`
 	Name string `json:"name"`
 }
-
-var categories []Category
+var categories []Category		 //Categories list 	
 
 // Order Model
 type Order struct {
 	ID 	       int    `json:"id"`
 	ProductID  int    `json:"product_id"`
 	CustomerID int    `json:"customer_id"`
-}
+}  
+var orders []Order   			//Orders list
 
-var orders []Order
+//Payment Model
+type Payment struct {
+    ID            int     `json:"id"`
+    CustomerID    int     `json:"customer_id"`
+    Amount        float64 `json:"amount"`
+    PaymentMethod string  `json:"payment_method"`
+}
+var payments []Payment
 
 func main() {
-
-
 	r := mux.NewRouter()
-
-
-
 	customers  = append(customers,Customer{ID: 99, Username: "Customer_1",Basket: []Order{} })
 	products = append(products,Product{ID: 1, Name: "apple", Price: 100})
 	products = append(products,Product{ID: 2, Name: "test1", Price: 200})
-	products = append(products,Product{ID: 3, Name: "test2", Price: 300})
-	products = append(products,Product{ID: 4, Name: "test3", Price: 400})
-	products = append(products,Product{ID: 5, Name: "test4", Price: 500})
-	products = append(products,Product{ID: 6, Name: "test5", Price: 600})
-	products = append(products,Product{ID: 7, Name: "test6", Price: 700})
-	products = append(products,Product{ID: 8, Name: "test7", Price: 800})
 	orders = append(orders, Order{})
 
 	headersOk := handlers.AllowedHeaders([]string{"X-Requested-With"})
     originsOk := handlers.AllowedOrigins([]string{"*"})
     methodsOk := handlers.AllowedMethods([]string{"GET", "HEAD", "POST", "PUT", "OPTIONS"})
-
-  
 
 	for _, product := range products {
         fmt.Println(product)
@@ -80,19 +73,57 @@ func main() {
 	r.HandleFunc("/categories", handleCategories)
 	r.HandleFunc("/orders", handleOrders)
 	r.HandleFunc("/customer", handleCustomers)
+	r.HandleFunc("/payments", handlePayments).Methods("POST")
   (http.ListenAndServe(":8000", handlers.CORS(originsOk, headersOk, methodsOk)(r)))
 }
 
 
-func handlePurchase(w http.ResponseWriter, r *http.Request){
+func handlePayments(w http.ResponseWriter, r *http.Request) {
+    switch r.Method {
+    case http.MethodPost:
+        var payment Payment
+        json.NewDecoder(r.Body).Decode(&payment)
 
+        // Validate the payment
+        if payment.Amount <= 0 {
+            w.WriteHeader(http.StatusBadRequest)
+            fmt.Fprint(w, "Payment amount must be greater than 0")
+            return
+        }
+
+        // Process the payment
+        if payment.PaymentMethod == "credit_card" {
+            // process credit card payment
+            fmt.Println("Processing credit card payment...")
+        } else if payment.PaymentMethod == "paypal" {
+            // process PayPal payment
+            fmt.Println("Processing PayPal payment...")
+        } else {
+            w.WriteHeader(http.StatusBadRequest)
+            fmt.Fprint(w, "Invalid payment method")
+            return
+        }
+
+        // Add the payment to the database
+        payment.ID = len(payments) + 1
+        payments = append(payments, payment)
+
+        // Return success response
+        w.WriteHeader(http.StatusOK)
+        fmt.Fprint(w, "Payment processed successfully")
+    default:
+        w.WriteHeader(http.StatusMethodNotAllowed)
+    }
+}
+
+
+func handlePurchase(w http.ResponseWriter, r *http.Request){
 	vars :=  mux.Vars(r)
 	id, ok :=  vars["id"]
 
 	if !ok {
 		fmt.Println("id missing in paremters")
 	}
-
 
 	i, err := strconv.Atoi(id)
 	if err !=nil{
@@ -107,7 +138,6 @@ func orderFactory(customer_id int,product_id int){
 		if(customer.ID == customer_id){
 			id = len(orders) + 1
 			orders =  append(orders,Order{ID: id, ProductID: product_id, CustomerID: customer_id})
-			
 			break
 		}
 	}
