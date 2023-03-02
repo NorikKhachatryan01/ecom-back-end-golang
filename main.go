@@ -1,73 +1,114 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
+	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 )
 
-//Above is provided the main components strucutres 
-
-//Customer Model
+//Strucutures and collections
 type Customer struct{
-	ID 		 int    `json:"id"`
-	Username string `json:"user_name"`
-	Basket   		[]Order		   
+	ID             int
+    Name           string
+    Email          string
+    LastLoginTime  time.Time
+    PagesVisited   []string
+    ItemsInCart    []string		   
 }
-var customers []Customer			//Customers list 
- 	
-// Product Model
+
+type Category struct {
+	ID 	 int 	`json:"id"`
+	Name string `json:"name"`
+}
+
 type Product struct {
 	ID 	  int 	  `json:"id"`
 	Name  string  `json:"name"`
 	Price int 	  `json:"price"`
 }
-var products []Product			  //Products list
 
-// Category Model
-type Category struct {
-	ID 	 int 	`json:"id"`
-	Name string `json:"name"`
-}
-var categories []Category		 //Categories list 	
-
-// Order Model
 type Order struct {
-	ID 	       int    `json:"id"`
-	ProductID  int    `json:"product_id"`
-	CustomerID int    `json:"customer_id"`
-}  
-var orders []Order   			//Orders list
+    ID           int
+	CustomerID   int
+    OrderDate    string
+    TotalAmount  float64
+	CreatedAt   time.Time
+    SessionID   string
+}
 
-//Payment Model
 type Payment struct {
     ID            int     `json:"id"`
     CustomerID    int     `json:"customer_id"`
     Amount        float64 `json:"amount"`
     PaymentMethod string  `json:"payment_method"`
 }
-var payments []Payment
+
+var customers  []Customer		
+var products   []Product			  
+var categories []Category		 
+var orders     []Order 
+var payments   []Payment
+///////////////////////////////////////////////////////////////////////////
+
+var db *sql.DB    //DB instance 
 
 func main() {
-	r := mux.NewRouter()
-	customers  = append(customers,Customer{ID: 99, Username: "Customer_1",Basket: []Order{} })
-	products = append(products,Product{ID: 1, Name: "apple", Price: 100})
-	products = append(products,Product{ID: 2, Name: "test1", Price: 200})
-	orders = append(orders, Order{})
 
+	var err error
+	db, err = sql.Open("mysql", "root:systemDesign2023$@tcp(host:3306)/ecommerce")
+	if err != nil {
+		panic(err.Error())
+	}
+	defer db.Close()
+
+	err = db.Ping()
+	if err != nil {
+		panic(err.Error())
+	}
+
+	customerID := 1 
+    orders, err := getOrdersByCustomerID(db, customerID)
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("Orders for customer %d:\n", customerID)
+    for _, order := range orders {
+        fmt.Printf("%d - Total amount: %f, Created at: %s, Session ID: %s\n", order.ID, order.TotalAmount, order.CreatedAt, order.SessionID)
+    }
+
+    // Get customer information
+    customer, err := getCustomerByID(db, customerID)
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("Customer information:\nName: %s\nEmail: %s\nLast login time: %s\nPages visited: %v\nItems in cart: %v\n",
+        customer.Name, customer.Email, customer.LastLoginTime, customer.PagesVisited, customer.ItemsInCart)
+
+
+	r := mux.NewRouter()
 	headersOk := handlers.AllowedHeaders([]string{"X-Requested-With"})
     originsOk := handlers.AllowedOrigins([]string{"*"})
     methodsOk := handlers.AllowedMethods([]string{"GET", "HEAD", "POST", "PUT", "OPTIONS"})
+
+	customers := getCustomers()
+	products := getProducts()
+
+	print(customers)
+	print(orders)
+
 
 	for _, product := range products {
         fmt.Println(product)
     }
 
-	
 	r.HandleFunc("/products", handleProducts)
 	r.HandleFunc("/products/{id}", handlePurchase).Methods("POST")
 	r.HandleFunc("/categories", handleCategories)
@@ -77,6 +118,37 @@ func main() {
   (http.ListenAndServe(":8000", handlers.CORS(originsOk, headersOk, methodsOk)(r)))
 }
 
+func getOrdersByCustomerID(db *sql.DB, customerID int) ([]Order, error) {
+    rows, err := db.Query("SELECT id, customer_id, total_amount, created_at, session_id FROM orders WHERE customer_id = ?", customerID)
+    if err != nil {
+        return nil, err
+    }
+    defer rows.Close()
+
+    orders := []Order{}
+    for rows.Next() {
+        var order Order
+        err := rows.Scan(&order.ID, &order.CustomerID, &order.TotalAmount, &order.CreatedAt, &order.SessionID)
+        if err != nil {
+            return nil, err
+        }
+        orders = append(orders, order)
+    }
+    if err = rows.Err(); err != nil {
+        return nil, err
+    }
+    return orders, nil
+}
+
+func getCustomerByID(db *sql.DB, customerID int) (Customer, error) {
+    var customer Customer
+    err := db.QueryRow("SELECT id, name, email, last_login_time, pages_visited, items_in_cart FROM customers WHERE id = ?", customerID).
+        Scan(&customer.ID, &customer.Name, &customer.Email, &customer.LastLoginTime, &customer.PagesVisited, &customer.ItemsInCart)
+    if err != nil {
+        return Customer{}, err
+    }
+    return customer, nil
+}
 
 func handlePayments(w http.ResponseWriter, r *http.Request) {
     switch r.Method {
@@ -116,7 +188,6 @@ func handlePayments(w http.ResponseWriter, r *http.Request) {
     }
 }
 
-
 func handlePurchase(w http.ResponseWriter, r *http.Request){
 	vars :=  mux.Vars(r)
 	id, ok :=  vars["id"]
@@ -125,19 +196,19 @@ func handlePurchase(w http.ResponseWriter, r *http.Request){
 		fmt.Println("id missing in paremters")
 	}
 
-	i, err := strconv.Atoi(id)
+	_, err := strconv.Atoi(id)
 	if err !=nil{
 		panic(err)
 	}
-	orderFactory(99,i)
+	orderFactory(99,"Vazgen","22/02/2023",123.4)
 }
 
-func orderFactory(customer_id int,product_id int){
+func orderFactory(customer_id int, customer_name string, order_date string, total_amount float64){
 	var id int 
 	for _,customer := range customers{
 		if(customer.ID == customer_id){
 			id = len(orders) + 1
-			orders =  append(orders,Order{ID: id, ProductID: product_id, CustomerID: customer_id})
+			orders =  append(orders,Order{ID: id, CustomerID: customer_id,OrderDate: order_date,TotalAmount: total_amount})
 			break
 		}
 	}
@@ -146,59 +217,30 @@ func orderFactory(customer_id int,product_id int){
 func handleCustomers(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		getCustomers(w, r)
+		getCustomers()
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
-func handleProducts(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		getProducts(w, r)
-	case http.MethodPost:
-		createProduct(w, r)
-	case http.MethodPut:
-		updateProduct(w, r)
-	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
+func getCustomers() []Customer {
+	rows, err := db.Query("SELECT * FROM customers")
+	if err != nil {
+		panic(err.Error())
 	}
-}
+	defer rows.Close()
 
-func getCustomers(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(customers)
-}
-
-func getProducts(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(products)
-}
-
-func createProduct(w http.ResponseWriter, r *http.Request) {
-	var product Product
-	json.NewDecoder(r.Body).Decode(&product)
-
-	product.ID = len(products) + 1
-	products = append(products, product)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(product)
-}
-
-func updateProduct(w http.ResponseWriter, r *http.Request) {
-	var product Product
-	json.NewDecoder(r.Body).Decode(&product)
-
-	for i, item := range products {
-		if item.ID == product.ID {
-			products[i] = product
-			break
+	var customers []Customer
+	for rows.Next() {
+		var customer Customer
+		err := rows.Scan(&customer.ID)
+		if err != nil {
+			panic(err.Error())
 		}
+		customers = append(customers, customer)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(product)
+	return customers
 }
 
 func handleCategories(w http.ResponseWriter, r *http.Request) {
@@ -261,10 +303,69 @@ func deleteCategory(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func handleProducts(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		getProducts()
+	case http.MethodPost:
+		createProduct(w, r)
+	case http.MethodPut:
+		updateProduct(w, r)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func getProducts() []Product {
+	rows, err := db.Query("SELECT * FROM products")
+	if err != nil {
+		panic(err.Error())
+	}
+	defer rows.Close()
+
+	var products []Product
+	for rows.Next() {
+		var product Product
+		err := rows.Scan(&product.ID, &product.Name, &product.Price)
+		if err != nil {
+			panic(err.Error())
+		}
+		products = append(products, product)
+	}
+
+	return products
+}
+
+func createProduct(w http.ResponseWriter, r *http.Request) {
+	var product Product
+	json.NewDecoder(r.Body).Decode(&product)
+
+	product.ID = len(products) + 1
+	products = append(products, product)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(product)
+}
+
+func updateProduct(w http.ResponseWriter, r *http.Request) {
+	var product Product
+	json.NewDecoder(r.Body).Decode(&product)
+
+	for i, item := range products {
+		if item.ID == product.ID {
+			products[i] = product
+			break
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(product)
+}
+
 func handleOrders(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		getOrders(w, r)
+		getOrders()
 	case http.MethodPost:
 		createOrder(w, r)
 	case http.MethodPut:
@@ -276,9 +377,28 @@ func handleOrders(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func getOrders(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(orders)
+func getOrders() ([]Order) {
+    orders := []Order{}
+
+    rows, err := db.Query("SELECT id, customer_id,  order_date, total_amount FROM orders")
+    if err != nil {
+        return nil
+    }
+
+    defer rows.Close()
+
+    for rows.Next() {
+        var order Order
+
+        err := rows.Scan(&order.ID, &order.CustomerID,  &order.OrderDate, &order.TotalAmount)
+        if err != nil {
+            return nil
+        }
+
+        orders = append(orders, order)
+    }
+
+    return orders
 }
 
 func createOrder(w http.ResponseWriter, r *http.Request) {
@@ -302,7 +422,6 @@ func updateOrder(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(order)
 }
@@ -317,6 +436,5 @@ func deleteOrder(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-
 	w.WriteHeader(http.StatusNoContent)
 }
