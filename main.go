@@ -8,9 +8,11 @@ import (
 
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
+	"github.com/go-redis/redis/v8"
+	_ "github.com/go-sql-driver/mysql"
 )
 
-//Above is provided the main components strucutres 
+//Provided the main components strucutres 
 
 //Customer Model
 type Customer struct{
@@ -52,13 +54,22 @@ type Payment struct {
 }
 var payments []Payment
 
+
+rdb := redis.NewClient(&redis.Options{
+    Addr:     "localhost:6379", // Redis server address
+    Password: "",               // Redis password
+    DB:       0,                // Redis database index
+})
+
 func main() {
 	r := mux.NewRouter()
+
+	//Test block______________________________________________________________________________
 	customers  = append(customers,Customer{ID: 99, Username: "Customer_1",Basket: []Order{} })
 	products = append(products,Product{ID: 1, Name: "apple", Price: 100})
 	products = append(products,Product{ID: 2, Name: "test1", Price: 200})
 	orders = append(orders, Order{})
-
+   //_________________________________________________________________________________________
 	headersOk := handlers.AllowedHeaders([]string{"X-Requested-With"})
     originsOk := handlers.AllowedOrigins([]string{"*"})
     methodsOk := handlers.AllowedMethods([]string{"GET", "HEAD", "POST", "PUT", "OPTIONS"})
@@ -165,14 +176,95 @@ func handleProducts(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+
+
 func getCustomers(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(customers)
+    // Check if the data is present in the Redis cache
+    cachedData, err := rdb.Get(context.Background(), "customers").Result()
+    if err == nil {
+        // Return the cached data if present
+        w.Header().Set("Content-Type", "application/json")
+        fmt.Fprint(w, cachedData)
+        return
+    }
+
+    // If the data is not present in the cache, query the database
+    customers := []Customer{
+        {ID: 1, Username: "Customer1", Basket: []Order{}},
+        {ID: 2, Username: "Customer2", Basket: []Order{}},
+        {ID: 3, Username: "Customer3", Basket: []Order{}},
+    }
+
+    // Store the data in the Redis cache
+    data, err := json.Marshal(customers)
+    if err != nil {
+        panic(err)
+    }
+    rdb.Set(context.Background(), "customers", data, 0)
+
+    // Return the data
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(customers)
 }
 
 func getProducts(w http.ResponseWriter, r *http.Request) {
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "",
+		DB:       0,  
+	})
+
+	productsJson, err := redisClient.Get("products").Result()
+	if err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(productsJson))
+		return
+	}
+
+	products := fetchProductsFromDatabase()
+	productsJson, _ = json.Marshal(products)
+	redisClient.Set("products", productsJson, 0)
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(products)
+	w.Write(productsJson)
+}
+
+
+func fetchProductsFromDatabase() []Product {
+	// Connect to MySQL database
+	db, err := sql.Open("mysql", "root:systemDesign2023$@tcp(host:3306)/ecommerce")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	
+	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	rows, err := db.Query("SELECT id, name, price FROM products")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+	products := []Product{}
+
+	for rows.Next() {
+		var id int
+		var name string
+		var price float64
+		err := rows.Scan(&id, &name, &price)
+		if err != nil {
+			log.Fatal(err)
+		}
+		product := Product{id, name, price}
+		products = append(products, product)
+	}
+	err = rows.Err()
+	if err != nil {
+		log.Fatal(err)
+	}
+	return products
 }
 
 func createProduct(w http.ResponseWriter, r *http.Request) {
@@ -217,8 +309,21 @@ func handleCategories(w http.ResponseWriter, r *http.Request) {
 }
 
 func getCategories(w http.ResponseWriter, r *http.Request) {
+	client := redis.NewClient(&redis.Options{
+		Addr: "localhost:6379",
+	})
+	cacheResult, err := client.Get("categories").Result()
+	if err == nil {
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(cacheResult))
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(categories)
+
+	jsonData, _ := json.Marshal(categories)
+	client.Set("categories", string(jsonData), 0)
 }
 
 func createCategory(w http.ResponseWriter, r *http.Request) {
